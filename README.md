@@ -24,7 +24,8 @@ An enabled agent is a full Sessionbus peer, on the same footing as `claude-peer`
 ## Prerequisites
 
 - Linux or macOS (amd64, arm64)
-- OpenClaw ≥ 2026.8.2 and the Node version that release requires
+- OpenClaw ≥ 2026.8.2 and the Node version that release requires; peers are verified up to 2026.9.8, lanes up to
+  2026.10.9 ([Verified](#verified))
 - Sessionbus 0.5.12, running under the same OS user as the OpenClaw Gateway
 
 ## Install
@@ -137,7 +138,15 @@ default: anthropic/claude-opus-5]
   Gateway to refresh `describe`. The model check on spawn always uses the live policy.
 - If the plugin is not reachable, `describe` still answers and the description says `lane settings unavailable: …`.
 
-Details: [the lane guide](lane/README.md).
+### A lane across a Gateway restart
+
+A Gateway restart ends the lane's OpenClaw session, including a turn in progress. The lane keeps its results:
+`status` / `wait` / `ack` still return them until the lane closes by `auto_close_ms`, its owner leaving, or `close`.
+A turn the restart cut short ends `unavailable` with the reason (`acp child exited: …`); its answer never existed.
+New runs on that lane are refused (`lane bridge lost` or `lane native session exited`), and a refused run clears the
+automatic-close timer, so close the old lane and spawn a new one.
+
+Details: [the lane guide](lane/README.md#losing-the-bridge).
 
 ### Runtimes and a message during a turn
 
@@ -180,7 +189,9 @@ security scan; releases are cut from `vX.Y.Z` tags matching [`RELEASE_VERSION`](
 ## Verified
 
 Docker smokes ([peer](smoke/docker/README.md), [lane](smoke/docker/lane/README.md)) pass on OpenClaw 2026.8.2 and
-2026.9.8; live runs on a real install are listed per runtime in [Runtimes](#runtimes-and-a-message-during-a-turn).
+2026.9.8. The lane smoke restarts the Gateway during and after a run and checks that results stay readable; it also
+passes on 2026.10.9. The peer smoke does not pass on 2026.10.9 yet: peers on OpenClaw 2026.10 are not supported in
+this release. Live runs on a real install are listed per runtime in [Runtimes](#runtimes-and-a-message-during-a-turn).
 Conformance table: [the plugin guide](docs/GUIDE.md#conformance-with-sessionbus-0512-busy-mid). Architecture:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
