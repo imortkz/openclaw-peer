@@ -126,7 +126,7 @@ test("status reports identity, groups and connection", async () => {
       "- name: advisor",
       "- groups: openclaw-peer",
       "- sessions: 4",
-      "- plugin: 0.2.0 (build unknown)",
+      "- plugin: 0.2.1 (build unknown)",
       "- OpenClaw: 2026.9.8",
     ].join("\n"),
   );
@@ -139,7 +139,7 @@ test("status shows the plugin build", async () => {
     .split("\n").find((text) => text.startsWith("- plugin:"));
   assert.equal(await line({ version: "0.2.0", release: "v0.2.0", revision: sha }), "- plugin: v0.2.0 (ca426d2025d9)");
   assert.equal(await line({ version: "0.2.0", release: "development", revision: sha }), "- plugin: 0.2.0 development (ca426d2025d9)");
-  assert.equal(await line(null), "- plugin: 0.2.0 (build unknown)");
+  assert.equal(await line(null), "- plugin: 0.2.1 (build unknown)");
   assert.equal(await line({ version: "0.2.0", release: "v0.2.0\n| x", revision: "*bold*" }), "- plugin: v0.2.0 \\| x (\\*bold\\*)");
 });
 
