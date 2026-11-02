@@ -35,10 +35,12 @@ test("package declares MIT and the root license contains its text", () => {
   assert.ok(readFileSync(path.join(ROOT, "LICENSE"), "utf8").startsWith("MIT License\n"));
 });
 
-test("package and lockfile declare version 0.2.0", () => {
-  assert.equal(pkg.version, "0.2.0");
-  assert.equal(lockfile.version, "0.2.0");
-  assert.equal(lockfile.packages[""].version, "0.2.0");
+test("package and lockfile declare RELEASE_VERSION", () => {
+  const release = readFileSync(path.join(ROOT, "RELEASE_VERSION"), "utf8").trim();
+  assert.match(release, /^\d+\.\d+\.\d+$/);
+  assert.equal(pkg.version, release);
+  assert.equal(lockfile.version, release);
+  assert.equal(lockfile.packages[""].version, release);
 });
 
 test("openclaw.compat.pluginApi targets >=2026.8.2", () => {
