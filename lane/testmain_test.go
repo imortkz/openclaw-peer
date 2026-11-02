@@ -1,10 +1,7 @@
 package lane_test
 
 import (
-	"time"
-
 	"fmt"
-	"github.com/imortkz/openclaw-peer/lane"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +62,5 @@ func run(m *testing.M) int {
 	for _, k := range []string{"FAKEACP_SCRIPT", "FAKEACP_LOG", "FAKEACP_STATE", "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_URL"} {
 		_ = os.Unsetenv(k)
 	}
-	lane.SetBridgeLossGrace(time.Second)
 	return m.Run()
 }

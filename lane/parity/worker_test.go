@@ -81,6 +81,7 @@ type bus struct {
 	script string
 	roots  map[string]string
 	env    []string
+	bridge *fakebridge.Server
 	daemon *exec.Cmd
 	out    *lockedBuffer
 }
@@ -126,6 +127,7 @@ func newBus(t *testing.T) *bus {
 	b.setScript(`{}`)
 	// The plugin's side of the worker bridge: serves the lane settings and accepts lane.register / lane.steer.
 	bridge := fakebridge.Start(t, fakebridge.Options{Settings: map[string]any{"agents": agents, "credentialDir": filepath.Join(dir, "cli")}})
+	b.bridge = bridge
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "SESSIONBUS_") && !strings.HasPrefix(kv, "PATH=") && !strings.HasPrefix(kv, "OPENCLAW_") && !strings.HasPrefix(kv, "FAKEACP_") {
 			b.env = append(b.env, kv)

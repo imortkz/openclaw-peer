@@ -1106,10 +1106,63 @@ func TestDirectivesNeutralized(t *testing.T) {
 
 // ---------------------------------------------------------------- crash and delivery
 
+// Exercise the real fake-process exit, not a simulated bridge callback. Neither
+// a failed child nor a refused next Run may retire the SDK's retained records.
+func assertChildExitRetained(t *testing.T, e *testEnv, h *harness, run, key string) {
+	t.Helper()
+	select {
+	case <-h.gone:
+		t.Fatal("ACP child exit retired worker before explicit close")
+	case <-time.After(1200 * time.Millisecond):
+	}
+	eventually(t, "native session lock released after child exit", func() bool { return h.lockFree(key) })
+	first, ok := h.request("turn.status", protocol.ReadRequest{SessionID: h.laneID, RunID: run})
+	var original protocol.RunStatus
+	if !ok || first.Error != nil {
+		t.Fatalf("crashed record status: %+v", first)
+	}
+	if err := protocol.UnmarshalResult("turn.status", first.Result, &original); err != nil {
+		t.Fatal(err)
+	}
+	if original.State != "unavailable" || original.Reason == "" {
+		t.Fatalf("crashed record = %+v", original)
+	}
+	prompts := len(e.events("prompt"))
+	refusedRun := h.Start("must not reach exited native session")
+	h.waitReady(refusedRun, waitFor)
+	f, ok := h.request("turn.wait", protocol.WaitRequest{SessionID: h.laneID, RunID: refusedRun})
+	var refused protocol.RunStatus
+	if !ok || f.Error != nil {
+		t.Fatalf("refused Run wait: %+v", f)
+	}
+	if err := protocol.UnmarshalResult("turn.wait", f.Result, &refused); err != nil {
+		t.Fatal(err)
+	}
+	if refused.State != "unavailable" || refused.Reason != "lane native session exited" {
+		t.Fatalf("post-exit Run = %+v", refused)
+	}
+	later, ok := h.request("turn.wait", protocol.WaitRequest{SessionID: h.laneID, RunID: run})
+	if !ok || later.Error != nil || string(first.Result) != string(later.Result) {
+		t.Fatalf("crashed record changed: status=%s wait=%+v", first.Result, later)
+	}
+	if n := len(e.events("prompt")); n != prompts {
+		t.Fatalf("new prompt reached exited child: %d vs %d", n, prompts)
+	}
+	for _, ref := range []string{run, refusedRun} {
+		if f, ok := h.request("turn.ack", protocol.RunRef{SessionID: h.laneID, RunID: ref}); !ok || f.Error != nil {
+			t.Fatalf("ack: %+v", f)
+		}
+	}
+	h.Close()
+}
+
 func TestChildCrashMidTurn(t *testing.T) {
 	e := newEnv(t)
 	h := e.start()
-	h.mustOpen(kit.OpenOptions{})
+	key := h.mustOpen(kit.OpenOptions{})
+	if h.lockFree(key) {
+		t.Fatal("native session lock is free before child exit")
+	}
 	run := h.Start("please CRASH")
 	var ready protocol.TurnReady
 	for ready.RunID != run {
@@ -1122,31 +1175,37 @@ func TestChildCrashMidTurn(t *testing.T) {
 	if ready.State != "unavailable" || ready.Reason == "" {
 		t.Fatalf("crashed run ready %+v, want a run error (state unavailable)", ready)
 	}
-	h.waitGone() // the lane shuts down after the run is done
+	assertChildExitRetained(t, e, h, run, key)
 }
 
 // At the wrapper level, a child that exits cleanly (code 0) in the middle
-// of a turn ends the run with an error and shuts the worker down, exactly like a crash.
+// of a turn ends the run unavailable and retains the worker, exactly like a crash.
 func TestChildCleanExitMidTurn(t *testing.T) {
 	e := newEnv(t)
 	h := e.start()
-	h.mustOpen(kit.OpenOptions{})
+	key := h.mustOpen(kit.OpenOptions{})
+	if h.lockFree(key) {
+		t.Fatal("native session lock is free before child exit")
+	}
 	run := h.Start("please CRASH0")
 	ready := h.waitReady(run, waitFor)
 	if ready.State != "unavailable" || !strings.Contains(ready.Reason, "code=0") {
 		t.Fatalf("clean-exit run ready %+v, want a run error naming code=0", ready)
 	}
-	h.waitGone()
+	assertChildExitRetained(t, e, h, run, key)
 }
 
 // At the wrapper level, the child exits after a complete answer,
 // while the lane is idle. The next run cannot reach it; that run ends unavailable and the worker
-// shuts down instead of staying up with a dead child. The test waits until the worker has reaped
+// retains that record while refusing further native work. The test waits until the worker has reaped
 // the child (kill(pid, 0) → ESRCH), so the next prompt meets a closed client, not a racing write.
-func TestChildExitWhileIdleShutsDown(t *testing.T) {
+func TestChildExitWhileIdleRetainsWorker(t *testing.T) {
 	e := newEnv(t)
 	h := e.start()
-	h.mustOpen(kit.OpenOptions{})
+	key := h.mustOpen(kit.OpenOptions{})
+	if h.lockFree(key) {
+		t.Fatal("native session lock is free before child exit")
+	}
 	completed(t, h.Execute("bye EXIT_AFTER"))
 	eventually(t, "the child to exit", func() bool { return len(e.events("exit_after_reply")) == 1 })
 	pid := int(e.events("exit_after_reply")[0]["pid"].(float64))
@@ -1157,7 +1216,7 @@ func TestChildExitWhileIdleShutsDown(t *testing.T) {
 	if ready := h.waitReady(run, waitFor); ready.State != "unavailable" || ready.Reason == "" {
 		t.Fatalf("run to a dead child: %+v, want unavailable with a reason", ready)
 	}
-	h.waitGone()
+	assertChildExitRetained(t, e, h, run, key)
 	if n := len(e.events("prompt")); n != prompts {
 		t.Fatalf("a prompt reached a child after it died")
 	}
@@ -1165,7 +1224,7 @@ func TestChildExitWhileIdleShutsDown(t *testing.T) {
 
 // The fake closes stdin after a completed turn, then exits while a helper keeps its output
 // pipes open. This pins the next write to EPIPE before the client's reader records the exit.
-func TestDeadChildWriteBeforeExitObservedShutsDown(t *testing.T) {
+func TestDeadChildWriteBeforeExitObservedRetainsWorker(t *testing.T) {
 	deadChildWriteBeforeExitObserved(t, 0)
 }
 
@@ -1198,7 +1257,10 @@ func deadChildWriteBeforeExitObserved(t *testing.T, holdExitMs int) {
 	var releaseOnce sync.Once
 	h := e.start()
 	t.Cleanup(func() { releaseOnce.Do(release) })
-	h.mustOpen(kit.OpenOptions{})
+	key := h.mustOpen(kit.OpenOptions{})
+	if h.lockFree(key) {
+		t.Fatal("native session lock is free before child exit")
+	}
 	completed(t, h.Execute("bye EXIT_AFTER"))
 	eventually(t, "fake stdin to close", func() bool { return len(e.events("stdin_closed_for_exit")) == 1 })
 	prompts := len(e.events("prompt"))
@@ -1214,7 +1276,7 @@ func deadChildWriteBeforeExitObserved(t *testing.T, holdExitMs int) {
 		t.Fatalf("a prompt reached the fake after stdin closed: %d vs %d", n, prompts)
 	}
 	releaseOnce.Do(release)
-	h.waitGone()
+	assertChildExitRetained(t, e, h, req.RunID, key)
 }
 
 func TestDeliveryRun(t *testing.T) {
@@ -1386,9 +1448,8 @@ func TestDeliverAfterBridgeLossIsNotSubmitted(t *testing.T) {
 	})
 	_ = h.Interrupt()
 	h.Wait(run)
-	// the loss armed the post-loss shutdown (closes the lane, then the grace): join it so nothing
-	// still writes into the test directory when t.TempDir is removed
-	h.waitGone()
+	// Explicit close owns worker retirement and joins native cleanup.
+	h.Close()
 }
 
 func TestDeliverOpenIdleIsNotRunning(t *testing.T) {
@@ -1903,21 +1964,22 @@ func TestCwdNulRejected(t *testing.T) {
 	e.noNativeWork(t)
 }
 
-// D5: without the bridge the lane fails closed. Idle: the worker exits at once.
-func TestBridgeLossIdleShutsDown(t *testing.T) {
+// Bridge loss refuses native work; explicit close retires the idle SDK worker.
+func TestBridgeLossIdleClosesNative(t *testing.T) {
 	e := newEnv(t)
 	h := e.start()
 	h.mustOpen(kit.OpenOptions{})
 	prompts := len(e.events("prompt"))
 	e.bridge.Drop()
-	h.waitGone()
+	eventually(t, "native session closure", func() bool { return len(e.events("session_close")) == 1 })
+	h.Close()
 	if n := len(e.events("prompt")); n != prompts {
 		t.Fatalf("prompts grew %d -> %d after bridge loss", prompts, n)
 	}
 }
 
-// Mid-run the lane finishes the run first; the worker exits only after its terminal.
-func TestBridgeLossMidRunShutsDownAfterTerminal(t *testing.T) {
+// Mid-run native cleanup waits for the terminal; explicit close retires the worker.
+func TestBridgeLossMidRunClosesNativeAfterTerminal(t *testing.T) {
 	e := newEnv(t)
 	h := e.start()
 	h.mustOpen(kit.OpenOptions{})
@@ -1933,7 +1995,8 @@ func TestBridgeLossMidRunShutsDownAfterTerminal(t *testing.T) {
 		t.Fatalf("interrupt: %v", rerr)
 	}
 	h.Wait(run)
-	h.waitGone()
+	eventually(t, "native session closure", func() bool { return len(e.events("session_close")) == 1 })
+	h.Close()
 	if n := len(e.events("prompt")); n != 1 {
 		t.Fatalf("prompts after bridge loss: %d, want 1", n)
 	}

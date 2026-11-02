@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 930" width="1000" height="930" role="img" aria-labelledby="title">
-<title id="title">Lane sequence: spawn launches a worker, which fetches its settings from the plugin over the bridge, confirms its credential is not admin, creates the session, starts openclaw acp and registers its session key on the bridge; a run passes the slash-command filter into an ACP prompt, the worker answers permission requests by permission_mode and performs the lane agent's bus actions; a message to a working lane is steered through the plugin and acknowledged written, or falls back to not_running; losing the bridge closes the lane and the worker exits after a 30 second grace.</title>
+<title id="title">Lane sequence: spawn launches a worker, which fetches its settings from the plugin over the bridge, confirms its credential is not admin, creates the session, starts openclaw acp and registers its session key on the bridge; a run passes the slash-command filter into an ACP prompt, the worker answers permission requests by permission_mode and performs the lane agent's bus actions; a message to a working lane is steered through the plugin and acknowledged written, or falls back to not_running; losing the bridge closes the native session while results remain available until ordinary lane retirement.</title>
 <style>
 svg{--bg:#f5f6f4;--surface:#ffffff;--ink:#1b2320;--muted:#5a655f;--line:#c4ccc7;--bus:#0d7466;--bus-tint:#e1f1ed;--oc:#b0441c;--oc-tint:#f8ebe5;--ours:#3446a8;--ours-tint:#e7eaf8}
 @media (prefers-color-scheme:dark){svg{--bg:#111614;--surface:#19211e;--ink:#e2e8e4;--muted:#9ba7a1;--line:#3a4641;--bus:#45c6b2;--bus-tint:#133a33;--oc:#ee8c61;--oc-tint:#3b2219;--ours:#93a4ff;--ours-tint:#1f2750}}
@@ -110,7 +110,7 @@ text{font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Helvetica,Arial,sans-s
 <text class="l ours" x="595" y="811" text-anchor="middle">eligible → receipt written</text>
 <text class="s" x="498" y="838">not accepted: 3 retries, then not_running + log line (safety net)</text>
 <rect class="frame" x="380" y="852" width="600" height="62" rx="4"/>
-<text class="s" x="392" y="870">bridge lost: idle lane closes at once; a running lane closes after its terminal</text>
-<text class="s" x="392" y="886">the worker then stays up 30 s so the result can be read and acknowledged</text>
+<text class="s" x="392" y="870">bridge lost: idle native session closes; a running session closes after its terminal</text>
+<text class="s" x="392" y="886">results remain readable until configured auto-close, owner exit or explicit close</text>
 <text class="s" x="392" y="902">new Open refused · pending bus actions cancelled</text>
 </svg>

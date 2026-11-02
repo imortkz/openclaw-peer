@@ -256,8 +256,10 @@ A disabled plugin registers no reload rules, so enabling it (`plugins.entries.se
 false → true) is still an in-place reload: run `openclaw gateway restart` right after. That
 explicit restart is not deferred.
 
-A restart closes the lanes that are open: a worker that loses the plugin's bridge closes its lane (after a
-running turn finishes) and exits after a 30 second grace for result collection. Resume them afterwards. A change
+A restart closes the native sessions of open lanes: a worker that loses the plugin's bridge closes its native session (after a
+running turn finishes). The worker retains results until the daemon's ordinary lane retirement policy or an
+explicit close; neither bridge loss nor an ACP child exit adds a deadline. A child exit ends the active Run unavailable and closes native resources while preserving that record and earlier unacknowledged results. Further Runs are unavailable with `lane native session exited`, or `lane bridge lost` if both faults occurred. Close the old lane before resuming afterwards (see
+[lane lifetime](../lane/README.md#losing-the-bridge)). A change
 under `channels.sessionbus` is applied by OpenClaw as a restart of that channel only.
 
 On OpenClaw 8.2, after an in-place `plugins.*` reload, we observed a claude-cli agent's
@@ -418,8 +420,8 @@ rule for a busy session.
 
 ## Restart behaviour
 
-A Gateway restart or a plugin generation swap restarts the bridge: connected workers lose it and close their lanes
-(see "Applying config changes"). A daemon connection loss re-hellos the peer with the same identity once the socket reconnects.
+A Gateway restart or a plugin generation swap restarts the bridge: connected workers lose it and close their native sessions
+(see "Applying config changes"). Headless lane workers retain results even if the restart kills their ACP child: native cleanup does not retire the worker. New native work is refused; close the old lane explicitly before resuming. A daemon connection loss re-hellos the peer with the same identity once the socket reconnects.
 Stopping and starting the plugin (a Gateway restart, or OpenClaw's in-place reload after another
 plugin's config change) reconnects every enabled agent;
 if an agent's `groups`/`name`/`sessionKey` changed, the next connection carries the new identity —

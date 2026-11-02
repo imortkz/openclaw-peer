@@ -193,24 +193,24 @@ func TestDeliverSteerFallback(t *testing.T) {
 	})
 }
 
-// TestBridgeLossFailsClosed: losing the bridge fails the lane closed — an idle lane goes
-// down at once; a lane with a live run goes down only after that run's terminal, and no
-// further prompt is sent to the child on the way out (D5).
+// TestBridgeLossFailsClosed: losing the bridge closes native resources, after the
+// terminal for a live run. The result-serving worker retires on ordinary close.
 func TestBridgeLossFailsClosed(t *testing.T) {
-	t.Run("idle lane shuts down immediately", func(t *testing.T) {
+	t.Run("idle native session closes immediately", func(t *testing.T) {
 		e := newEnv(t)
 		h := e.start()
 		h.mustOpen(kit.OpenOptions{})
 		prompts := len(e.callerPrompts())
 
 		e.bridge.Drop()
-		h.waitGone()
+		eventually(t, "native closure", func() bool { return len(e.events("session_close")) == 1 })
+		h.Close()
 		if n := len(e.callerPrompts()); n != prompts {
 			t.Fatalf("prompts grew %d -> %d after the bridge loss", prompts, n)
 		}
 	})
 
-	t.Run("live run shuts down after its terminal", func(t *testing.T) {
+	t.Run("live native session closes after its terminal", func(t *testing.T) {
 		e := newEnv(t)
 		h := e.start()
 		run := mustStartBusy(t, e, h)
@@ -225,7 +225,8 @@ func TestBridgeLossFailsClosed(t *testing.T) {
 			t.Fatalf("prompts after the bridge loss: %d, want 1", n)
 		}
 		endSlowTurn(t, h, run)
-		h.waitGone()
+		eventually(t, "native closure", func() bool { return len(e.events("session_close")) == 1 })
+		h.Close()
 		if n := len(e.callerPrompts()); n != 1 {
 			t.Fatalf("prompts after shutdown: %d, want 1 (no farewell prompt)", n)
 		}

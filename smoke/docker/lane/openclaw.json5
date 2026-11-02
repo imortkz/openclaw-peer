@@ -12,9 +12,10 @@
     ],
   } } },
   agents: {
-    // 8.2+ needs ownership:"explicit" or one legacy default marker for three agents.
-    // Explicit breaks lane CLI pairing on 8.2 and workspace plugin discovery on 9.6;
-    // keep the marker (9.5+ only logs a retired-marker warning) and ownership unset.
+    // run.sh keeps this legacy marker for releases before 2026.10: explicit ownership
+    // breaks lane CLI pairing on 8.2 and workspace plugin discovery on 9.6.
+    // For 2026.10+ it renders explicit ownership and surface owners, removing the marker.
+    // LANE_SMOKE_OWNERSHIP=marker|explicit overrides the version-selected mode.
     defaults: { model: { primary: "mock/mock-a" } },
     entries: {
       lane: { default: true, workspace: "__LANE_ROOT__", tools: { alsoAllow: ["sessionbus"], fs: { workspaceOnly: true }, exec: { ask: "always" } } },

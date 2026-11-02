@@ -128,12 +128,20 @@ possible in OpenClaw today (see the conformance log in the [plugin guide](GUIDE.
 
 ### Losing the bridge
 
-Without the bridge the plugin can neither steer into the lane nor serve its tool, so the lane fails closed. An idle
-lane is closed at once. A running lane finishes its run first and is closed once the daemon has seen the outcome.
-In both cases the worker then stays up for a **30 second grace** so the host can still read and acknowledge the run's
-result (`status`/`ack`), then exits; the host's own `close` ends it sooner. A new Open is refused while the bridge is
-gone, and pending bridge actions are cancelled. A change under `plugins.entries.sessionbus` restarts the Gateway and
-therefore closes the live lanes this way.
+Without the bridge the plugin can neither steer into the lane nor serve its tool, so new native work is
+refused. An idle native session is closed at once. A running native session finishes its run first and is
+closed once the daemon has seen the outcome. The worker stays connected to Sessionbus to serve retained
+results through `status`, `wait` and `ack`; bridge loss adds no retirement deadline. The daemon's existing
+`auto_close_ms`, owner-lifetime policy, explicit `close`, or loss of the daemon connection retires the worker.
+Acknowledging a result does not close the worker.
+
+A refused new Run returns `unavailable` with `lane bridge lost`; it does not start a new automatic-close
+grace. Admitting that Run clears any previous deadline, so an explicit close may be needed even with
+nonzero `auto_close_ms`. The same applies when `auto_close_ms` is zero or no native terminal has armed a
+deadline (a nonpersistent lane also closes when its owner leaves). Close the old lane before resuming after
+the bridge is restored; this does not automatically reattach its native session. Pending bridge actions are
+cancelled. A change under `plugins.entries.sessionbus` restarts the Gateway and closes native lane sessions
+this way. An actual ACP child exit follows the same retention policy: native resources close after the Run outcome, while the SDK worker stays connected. Subsequent Runs return `unavailable` with `lane native session exited`; `lane bridge lost` takes priority when both faults occurred. An idle child exit is detected by the next Run, which ends unavailable. Explicitly close the old lane before resuming; child exit adds no retirement deadline and does not discard older unacknowledged results.
 
 ## Where settings come from
 

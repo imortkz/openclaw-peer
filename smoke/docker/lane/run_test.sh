@@ -862,7 +862,188 @@ test_admin_guard_documented() {
   grep -q 'admin.*hard refusal' "$lane_readme" || { echo "lane README omits admin refusal" >&2; return 1; }
 }
 
+test_lane_ownership_defaults() {
+  local OPENCLAW_IMAGE LANE_SMOKE_OWNERSHIP actual image expected
+  LANE_SMOKE_OWNERSHIP=""
+  while read -r image expected; do
+    OPENCLAW_IMAGE="$image"
+    actual=$(lane_ownership_mode) || return 1
+    [[ "$actual" == "$expected" ]] || { echo "$image: got $actual, expected $expected" >&2; return 1; }
+  done <<'CASES'
+ghcr.io/openclaw/openclaw:2026.8.2 marker
+ghcr.io/openclaw/openclaw:2026.9.6 marker
+ghcr.io/openclaw/openclaw:2026.10.9 explicit
+ghcr.io/openclaw/openclaw:2027.1.0 explicit
+custom/image:latest explicit
+custom/image:2026.8.2 marker
+custom/image explicit
+localhost:5000/custom/image explicit
+custom/image@sha256:abcdef explicit
+CASES
+  OPENCLAW_IMAGE=custom/image:2026.10.9
+  LANE_SMOKE_OWNERSHIP=marker
+  [[ "$(lane_ownership_mode)" == marker ]] || return 1
+  OPENCLAW_IMAGE=custom/image:2026.8.2
+  LANE_SMOKE_OWNERSHIP=explicit
+  [[ "$(lane_ownership_mode)" == explicit ]] || return 1
+  LANE_SMOKE_OWNERSHIP=invalid
+  if (lane_ownership_mode >/dev/null 2>&1); then echo 'invalid mode accepted' >&2; return 1; fi
+}
+
+test_lane_ownership_render() {
+  local rendered_dir mode
+  rendered_dir=$(mktemp -d)
+  trap 'rm -rf "$rendered_dir"' RETURN
+  for mode in marker explicit; do
+    render_lane_config "$LANE_SMOKE_ROOT/openclaw.json5" "$rendered_dir/$mode.json" /tmp/lane /tmp/b /tmp/decoy test-token /tmp/audit "$mode"
+    node - "$rendered_dir/$mode.json" "$mode" <<'NODE'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const explicit = process.argv[3] === 'explicit';
+assert.equal(config.agents.ownership, explicit ? 'explicit' : undefined);
+assert.equal(config.agents.entries.lane.default, explicit ? undefined : true);
+for (const key of ['heartbeat', 'systemAgent', 'authInheritance']) {
+  assert.deepEqual(config.agents.defaults[key], explicit ? {agentId:'lane'} : undefined);
+}
+assert.equal(config.agents.defaults.model.primary, 'mock/mock-a');
+assert.equal(config.agents.entries.lane.workspace, '/tmp/lane');
+assert.equal(config.agents.entries.b.workspace, '/tmp/b');
+assert.equal(config.agents.entries.decoy.workspace, '/tmp/decoy');
+assert.equal(config.gateway.auth.token, 'test-token');
+assert.equal(config.plugins.entries.sessionbus.config.lanes.auditLog, '/tmp/audit');
+assert.equal(fs.statSync(process.argv[2]).mode & 0o777, 0o600);
+NODE
+  done
+}
+
+test_bridge_loss_clause() {
+  local target="$1" test_dir mode="${2:-good}" output
+  test_dir=$(mktemp -d)
+  trap 'rm -rf "$test_dir"' RETURN
+  tmp="$test_dir"
+  local calls="$test_dir/calls"
+  compose=(fake_compose)
+  fake_compose() {
+    echo "compose $*" >>"$calls"
+    touch "$test_dir/restarted"
+  }
+  sleep() { echo "sleep $*" >>"$calls"; }
+  wait_bridge() { echo wait_bridge >>"$calls"; }
+  mock_log_mark() { echo 0; }
+  mock_log_since() {
+    echo '{"lastUser":"SLOW bridge-loss-mid-run"}'
+    if [[ "$mode" == submitted ]]; then
+      jq -nc --arg input "$(cat "$test_dir/input")" '{lastUser:$input}'
+    fi
+  }
+  retained_terminal() {
+    if [[ "$mode" == native-exit ]]; then
+      echo '{"run_id":"r1","state":"unavailable","reason":"acp child exited code=1"}'
+    else
+      echo '{"run_id":"r1","state":"done","result":{"outcome":"completed","result":"ECHO retained"}}'
+    fi
+  }
+  sb() {
+    echo "$1 $2" >>"$calls"
+    case "$1" in
+      lane.spawn)
+        jq -e '.auto_close_ms==0' <<<"$2" >/dev/null || return 1
+        echo '{"session_id":"agent:lane:sb-test"}' ;;
+      turn.run)
+        if [[ "$2" == *BRIDGE_LOSS_REFUSED* ]]; then
+          if [[ "$mode" == not-lost ]]; then
+            echo '{"run_id":"r2","state":"done","result":{"outcome":"completed","result":"still connected"}}'; return
+          fi
+          jq -r '.input' <<<"$2" >"$test_dir/input"
+          jq -nc --arg reason "$(case "$mode" in wrong-reason) echo other;; native-exit) echo 'lane native session exited';; *) echo 'lane bridge lost';; esac)" '{run_id:"r2",state:"unavailable",reason:$reason}'
+        else
+          echo '{"run_id":"r1","state":"done","result":{"outcome":"completed","result":"ECHO retained"}}'
+        fi ;;
+      turn.start) echo '{"run_id":"r1"}' ;;
+      turn.status)
+        if [[ "$target" == bridge-loss-mid-run && ! -f "$test_dir/restarted" ]]; then
+          echo '{"run_id":"r1","state":"running"}'; return
+        fi
+        if [[ "$mode" == lost ]] || [[ -f "$test_dir/closed" ]]; then
+          echo '{"error":{"code":"unknown_session"}}'; return 1
+        fi
+        if [[ "$mode" == native-exit ]]; then retained_terminal; return; fi
+        jq -nc --arg text "$([[ "$mode" == changed ]] && echo changed || echo 'ECHO retained')" '{run_id:"r1",state:"done",result:{outcome:"completed",result:$text}}' ;;
+      turn.wait) retained_terminal ;;
+      session.close) touch "$test_dir/closed"; echo '{}' ;;
+      turn.ack) echo '{}' ;;
+      *) echo "unexpected $1" >&2; return 1 ;;
+    esac
+  }
+  if [[ "$mode" != good && "$mode" != native-exit ]]; then
+    if output=$(check_clause "$target" 2>&1); then
+      echo "$target accepted $mode" >&2; return 1
+    fi
+    case "$mode" in
+      lost) [[ "$output" == *'turn.status:'*unknown_session* ]] ;;
+      changed) [[ "$output" == *'retained'* || "$output" == *'terminal not retained'* ]] ;;
+      wrong-reason|not-lost) [[ "$output" == *'bridge was not lost'* ]] ;;
+      submitted) [[ "$output" == *'refused input reached mock'* ]] ;;
+    esac || { echo "wrong failure: $output" >&2; return 1; }
+    return
+  fi
+  output=$(check_clause "$target" 2>&1) || { echo "$output" >&2; return 1; }
+  [[ "$output" == *"$target: PASS"* ]] || return 1
+  grep -q 'compose restart openclaw-gateway' "$calls" || return 1
+  grep -q '^sleep 35$' "$calls" || return 1
+  [[ "$(grep -c '^wait_bridge$' "$calls")" == 1 ]] || return 1
+  # Recovery must precede the retention wait; no tunnel-restart fallback.
+  awk '/^compose restart openclaw-gateway$/ {restart=1; next}
+       /^wait_bridge$/ {if (!restart) exit 1; ready=1; next}
+       /^sleep 35$/ {if (!ready) exit 1; waited=1}
+       END {if (!waited) exit 1}' "$calls" || return 1
+  ! grep -q 'compose restart bridge-tunnel' "$calls" || return 1
+  [[ "$(grep -c '^turn.ack ' "$calls")" == 2 ]] || return 1
+  grep -q 'turn.ack .*"run_id":"r1"' "$calls" || return 1
+  grep -q 'turn.ack .*"run_id":"r2"' "$calls" || return 1
+  if [[ "$target" == bridge-loss-mid-run ]]; then
+    if [[ "$mode" == native-exit ]]; then
+      [[ "$output" == *'state=unavailable'* && "$output" == *'lane native session exited'* ]] || return 1
+    else
+      [[ "$output" == *'state=done outcome=completed'* ]] || return 1
+    fi
+  fi
+}
+
+if [[ $# == 0 ]]; then
+  # Run each focused case in a fresh shell: stubs must not leak between cases.
+  while read -r focused; do
+    bash "$0" "$focused"
+    printf '%s: PASS\n' "$focused"
+  done < <(sed -n 's/^  \([a-z][a-z0-9-]*\)).*/\1/p' "$0")
+  exit 0
+fi
+
 case "${1:-}" in
+  bridge-loss-native-exit) test_bridge_loss_clause bridge-loss-mid-run native-exit ;;
+  lane-ownership-defaults) test_lane_ownership_defaults ;;
+  lane-ownership-render) test_lane_ownership_render ;;
+  bridge-loss-retain)
+    test_bridge_loss_clause bridge-loss-retain
+    for mode in lost changed wrong-reason submitted; do
+      (test_bridge_loss_clause bridge-loss-retain "$mode")
+    done ;;
+  bridge-loss-not-lost)
+    (test_bridge_loss_clause bridge-loss-mid-run not-lost)
+    (test_bridge_loss_clause bridge-loss-retain not-lost) ;;
+  bridge-loss-unknown-session)
+    (test_bridge_loss_clause bridge-loss-retain lost)
+    (test_bridge_loss_clause bridge-loss-mid-run lost) ;;
+  bridge-loss-mid-run)
+    test_bridge_loss_clause bridge-loss-mid-run
+    for mode in lost changed wrong-reason submitted; do
+      (test_bridge_loss_clause bridge-loss-mid-run "$mode")
+    done ;;
+  bridge-loss-docs)
+    for name in bridge-loss-retain bridge-loss-mid-run; do
+      grep -q "\`$name\`" smoke/docker/lane/README.md || { echo "README missing $name" >&2; exit 1; }
+    done ;;
   cwd-permissions) test_cwd_permissions ;;
   spawn-names-unique) test_spawn_names_are_unique_per_call ;;
   provision-credential-helper-failure) test_provision_credential_reports_helper_failure ;;
