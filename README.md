@@ -33,7 +33,7 @@ An enabled agent is a full Sessionbus peer, on the same footing as `claude-peer`
 curl -fsSL https://raw.githubusercontent.com/imortkz/openclaw-peer/main/scripts/install.sh | sh
 ```
 
-The installer takes the latest release (`OPENCLAW_PEER_VERSION=v0.2.0` pins one), checks its checksum, installs
+The installer takes the latest release (`OPENCLAW_PEER_VERSION=v0.2.1` pins one), checks its checksum, installs
 the lane worker as `~/.local/bin/openclaw-peer` and puts the plugin package beside it. It changes nothing else and
 prints the remaining steps: install the plugin into OpenClaw, restart the Gateway, and — for lanes — add
 `openclaw-peer` to `SESSIONBUS_PRODUCTS` in the Sessionbus `service.env`.

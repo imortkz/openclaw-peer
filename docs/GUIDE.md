@@ -62,7 +62,7 @@ Diagrams of the plugin and the lane worker: [docs/ARCHITECTURE.md](ARCHITECTURE.
 curl -fsSL https://raw.githubusercontent.com/imortkz/openclaw-peer/main/scripts/install.sh | sh
 ```
 
-Set `OPENCLAW_PEER_VERSION=v0.2.0` to pin a tag. The installer verifies the archive checksum,
+Set `OPENCLAW_PEER_VERSION=v0.2.1` to pin a tag. The installer verifies the archive checksum,
 installs the worker in `~/.local/libexec/sessionbus/openclaw` with a `~/.local/bin/openclaw-peer`
 link, and places the packed plugin beside it. It prints the plugin install, Gateway restart, and
 Sessionbus daemon setup commands; it does not change OpenClaw or `service.env` itself.
@@ -102,7 +102,7 @@ go build -mod=vendor -trimpath \
 openclaw-peer --version
 ```
 
-The version check prints `openclaw-peer v0.2.0 (<commit>)`. Sessionbus's Linux and macOS
+The version check prints `openclaw-peer v0.2.1 (<commit>)`. Sessionbus's Linux and macOS
 installers put `~/.local/bin` on the daemon service's `PATH`; otherwise add the binary's
 directory to that service `PATH`. The `openclaw` command must be on the same service `PATH`.
 In `${XDG_CONFIG_HOME:-$HOME/.config}/sessionbus/service.env`, append `openclaw-peer` to
